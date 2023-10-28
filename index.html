@@ -1,0 +1,146 @@
+<!doctype html>
+
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>WebGPU Life</title>
+  </head>
+  <body>
+    <!-- 全てはcanvasから始まる -->
+    <canvas width="512" height="512"></canvas>
+    <script type="module">
+      // canvas要素の取得 
+      const canvas = document.querySelector("canvas");
+
+      // ブラウザが対応しているか
+      if (!navigator.gpu) {
+        throw new Error("WebGPU not supported on this browser.");
+      }
+      console.log(navigator.gpu);
+
+      // ハードが対応しているか 
+      const adapter = await navigator.gpu.requestAdapter();
+      if (!adapter) {
+        throw new Error("No appropriate GPUAdapter found.");
+      }
+      console.log(adapter);
+      
+      // こいつを通して色々する
+      const device = await adapter.requestDevice();
+      console.log(device);
+
+      // WebGPU用のメソッドを持ったオブジェクトを呼び出し
+      const context = canvas.getContext("webgpu");
+      console.log(context);
+
+      // このGPUにおけるテクスチャのフォーマットを取得
+      const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
+      console.log(canvasFormat);
+
+      // deviceとformatを設定
+      context.configure({
+        device: device,
+        format: canvasFormat,
+      });
+
+      // 頂点
+      const vertices = new Float32Array([
+        //   X,    Y,
+        -0.8, -0.8, // Triangle 1 (Blue)
+        0.8, -0.8,
+        0.8,  0.8,
+
+        -0.8, -0.8, // Triangle 2 (Red)
+        0.8,  0.8,
+        -0.8,  0.8,
+      ]);
+      console.log(vertices);
+
+      // 頂点バッファを作成
+      const vertexBuffer = device.createBuffer({
+        label: "Cell vertices",
+        size: vertices.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+      console.log(vertexBuffer);
+
+      // 頂点バッファに書き込み
+      device.queue.writeBuffer(vertexBuffer, /*bufferOffset=*/0, vertices);
+
+      // 頂点レイアウト
+      const vertexBufferLayout = {
+        arrayStride: 8, // 1頂点ごとのメモリサイズ
+        attributes: [{
+          format: "float32x2",
+          offset: 0,
+          shaderLocation: 0, // シェーダー内のどのindexの変数として扱うか（今回の場合はPosition）
+        }],
+      };
+
+      // シェーダーを作成
+      const cellShaderModule = device.createShaderModule({
+        label: "Cell shader",
+        code: `
+        @vertex // 頂点シェーダー
+        fn vertexMain(@location(0) pos: vec2f) -> // index=0にlayoutされた値をposとして扱う
+          @builtin(position) vec4f {
+            return vec4f(pos, 0, 1); // X,Y,Z,W
+        }
+
+        @fragment // フラグメントシェーダー
+        fn fragmentMain() -> @location(0) vec4f { // カラーバッファのindex=0に値を返す
+            return vec4f(1, 0, 0, 1); // R,G,B,A
+        }
+        `
+      });
+
+      // レンダリングパイプラインを定義
+      const cellPipeline = device.createRenderPipeline({
+        label: "Cell pipeline",
+        layout: "auto",
+        vertex: {
+          module: cellShaderModule,
+          entryPoint: "vertexMain",
+          buffers: [vertexBufferLayout]
+        },
+        fragment: {
+          module: cellShaderModule,
+          entryPoint: "fragmentMain",
+          targets: [{
+            format: canvasFormat
+          }]
+        }
+      });
+
+      // GPUにコマンドを送信するためのエンコーダ
+      const encoder = device.createCommandEncoder();
+      
+      // カラーバッファの作成
+      const pass = encoder.beginRenderPass({
+        colorAttachments: [{
+          view: context.getCurrentTexture().createView(), // テクスチャを指定
+          loadOp: "clear", // レンダリング開始時にテクスチャをクリアする
+          clearValue: { r: 0, g: 0, b: 0.4, a: 1 }, // クリア時の色
+          storeOp: "store", // レンダリング終了後に結果をテクスチャに保存する
+        }]
+      });
+      console.log(encoder);
+      console.log(pass);
+      
+      // レンダリング
+      pass.setPipeline(cellPipeline);
+      pass.setVertexBuffer(0, vertexBuffer);
+      pass.draw(vertices.length / 2); // 6 vertices
+
+      // レンダリングパスの終了
+      pass.end();
+      
+      // GPUへのコマンドバッファを作成
+      const commandBuffer = encoder.finish();
+      console.log(commandBuffer);
+      
+      // コマンドバッファをGPUに送信
+      device.queue.submit([commandBuffer]);
+    </script>
+  </body>
+</html>
